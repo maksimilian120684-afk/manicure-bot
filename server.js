@@ -11,35 +11,109 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const APP_SECRET = process.env.APP_SECRET;
 const OWNER_PSID = process.env.OWNER_PSID; // необязательно: куда присылать новые записи
 const PORT = process.env.PORT || 3000;
-const GRAPH = "https://graph.facebook.com/v21.0/me/messages";
 const BOOKINGS_FILE = path.join(__dirname, "bookings.json");
 
 const app = express();
 app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 // ---------- отправка сообщений ----------
-async function send(psid, text, quickReplies) {
-  const message = { text };
-  if (quickReplies && quickReplies.length) {
-    message.quick_replies = quickReplies.slice(0, 13).map((q) => ({
-      content_type: "text",
-      title: q.title.slice(0, 20),
-      payload: q.payload
-    }));
-  }
+const API = "https://graph.facebook.com/v21.0/me";
+const GRAPH = API + "/messages";
+const baseUrl = () => (process.env.RENDER_EXTERNAL_URL || cfg.publicUrl || "").replace(/\/$/, "");
+
+function qrs(list) {
+  return (list || []).slice(0, 13).map((q) => ({
+    content_type: "text",
+    title: q.title.slice(0, 20),
+    payload: q.payload
+  }));
+}
+
+async function sendRaw(psid, message) {
   const res = await fetch(`${GRAPH}?access_token=${encodeURIComponent(PAGE_TOKEN)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ recipient: { id: psid }, messaging_type: "RESPONSE", message })
   });
   if (!res.ok) console.error("Send API error:", res.status, await res.text());
+  return res.ok;
+}
+
+async function send(psid, text, quickReplies) {
+  const message = { text };
+  if (quickReplies && quickReplies.length) message.quick_replies = qrs(quickReplies);
+  return sendRaw(psid, message);
 }
 
 const MENU = [
   { title: "Записаться", payload: "BOOK" },
+  { title: "Работы мастера", payload: "PORTFOLIO" },
   { title: "Услуги и цены", payload: "PRICES" },
   { title: "Адрес и часы", payload: "INFO" }
 ];
+
+// Красивая карточка с обложкой и кнопками
+async function sendMenu(psid) {
+  const buttons = [
+    { type: "postback", title: "Записаться", payload: "BOOK" },
+    cfg.portfolioUrl
+      ? { type: "web_url", url: cfg.portfolioUrl, title: "Работы мастера" }
+      : { type: "postback", title: "Услуги и цены", payload: "PRICES" },
+    { type: "postback", title: "Услуги и цены", payload: "PRICES" }
+  ].slice(0, 3);
+  const element = { title: cfg.businessName, subtitle: (cfg.tagline || "").slice(0, 80), buttons };
+  if (baseUrl()) element.image_url = baseUrl() + "/cover.jpg";
+  const quick = [{ title: "Адрес и часы", payload: "INFO" }];
+  const ok = await sendRaw(psid, {
+    attachment: { type: "template", payload: { template_type: "generic", elements: [element] } },
+    quick_replies: qrs(quick)
+  });
+  if (!ok) return send(psid, cfg.greeting, MENU); // запасной вариант: обычное меню кнопками
+}
+
+async function sendPortfolio(psid) {
+  if (!cfg.portfolioUrl) return send(psid, "Работы мастера скоро появятся здесь.", MENU);
+  const ok = await sendRaw(psid, {
+    attachment: {
+      type: "template",
+      payload: {
+        template_type: "button",
+        text: "Работы мастера: фото на нашей странице 💅",
+        buttons: [{ type: "web_url", url: cfg.portfolioUrl, title: "Смотреть работы" }]
+      }
+    },
+    quick_replies: qrs(MENU.filter((m) => m.payload !== "PORTFOLIO"))
+  });
+  if (!ok) return send(psid, `Работы мастера: ${cfg.portfolioUrl}`, MENU);
+}
+
+// Стартовый экран чата: приветствие, кнопка «Начать», постоянное меню рядом с полем ввода
+async function setupProfile() {
+  const body = {
+    get_started: { payload: "GET_STARTED" },
+    greeting: [{ locale: "default", text: (cfg.profileGreeting || cfg.greeting).slice(0, 160) }],
+    persistent_menu: [{
+      locale: "default",
+      composer_input_disabled: false,
+      call_to_actions: [
+        { type: "postback", title: "Записаться", payload: "BOOK" },
+        ...(cfg.portfolioUrl ? [{ type: "web_url", title: "Работы мастера", url: cfg.portfolioUrl }] : []),
+        { type: "postback", title: "Услуги и цены", payload: "PRICES" },
+        { type: "postback", title: "Адрес и часы", payload: "INFO" }
+      ]
+    }]
+  };
+  try {
+    const res = await fetch(`${API}/messenger_profile?access_token=${encodeURIComponent(PAGE_TOKEN)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    console.log("Профиль чата:", res.status, await res.text());
+  } catch (e) {
+    console.error("Профиль чата не настроен:", e.message);
+  }
+}
 
 // ---------- состояние диалога (в памяти) ----------
 const sessions = new Map(); // psid -> { step, data }
@@ -88,10 +162,11 @@ async function handle(psid, text, payload) {
   const key = (payload || text || "").trim();
   const low = key.toLowerCase();
 
-  if (!key || ["меню", "menu", "start", "привет", "здравствуйте", "/start"].includes(low) || payload === "MENU") {
+  if (!key || ["меню", "menu", "start", "привет", "здравствуйте", "/start"].includes(low) || payload === "MENU" || payload === "GET_STARTED") {
     sessions.delete(psid);
-    return send(psid, cfg.greeting, MENU);
+    return sendMenu(psid);
   }
+  if (payload === "PORTFOLIO") return sendPortfolio(psid);
   if (payload === "PRICES") {
     const lines = cfg.services.map((s) => `• ${s.name} — ${s.price}`).join("\n");
     return send(psid, `Наши услуги:\n${lines}`, MENU);
@@ -194,6 +269,7 @@ async function handle(psid, text, payload) {
 }
 
 // ---------- webhook ----------
+app.get("/cover.jpg", (_req, res) => res.sendFile(path.join(__dirname, "cover.jpg")));
 app.get("/", (_req, res) => res.send(`${cfg.businessName}: бот работает`));
 
 app.get("/webhook", (req, res) => {
@@ -217,7 +293,21 @@ app.post("/webhook", (req, res) => {
   if (req.body.object !== "page") return;
   for (const entry of req.body.entry || []) {
     for (const ev of entry.messaging || []) {
-      if (!ev.sender || !ev.message || ev.message.is_echo) continue;
+      if (!ev.sender) continue;
+      // нажатие кнопки в карточке/меню или «Начать» (в нём может быть метка источника ref)
+      if (ev.postback) {
+        const ref = (ev.postback.referral && ev.postback.referral.ref) || "";
+        if (ref) console.log("Новый клиент, источник:", ref);
+        handle(ev.sender.id, ev.postback.title, ev.postback.payload).catch((e) => console.error("handle error:", e));
+        continue;
+      }
+      // переход по ссылке m.me/...?ref=... , когда чат уже существует
+      if (ev.referral) {
+        if (ev.referral.ref) console.log("Переход по ссылке, источник:", ev.referral.ref);
+        handle(ev.sender.id, "", "MENU").catch((e) => console.error("handle error:", e));
+        continue;
+      }
+      if (!ev.message || ev.message.is_echo) continue;
       const payload = ev.message.quick_reply && ev.message.quick_reply.payload;
       handle(ev.sender.id, ev.message.text, payload).catch((e) => console.error("handle error:", e));
     }
@@ -226,6 +316,9 @@ app.post("/webhook", (req, res) => {
 
 if (require.main === module) {
   if (!PAGE_TOKEN || !VERIFY_TOKEN) console.warn("Задайте PAGE_ACCESS_TOKEN и VERIFY_TOKEN в переменных окружения");
-  app.listen(PORT, () => console.log("Бот запущен на порту", PORT));
+  app.listen(PORT, () => {
+    console.log("Бот запущен на порту", PORT);
+    if (PAGE_TOKEN) setupProfile();
+  });
 }
-module.exports = { app, handle };
+module.exports = { app, handle, sendMenu, setupProfile };
