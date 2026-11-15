@@ -1,0 +1,9 @@
+{
+  "name": "messenger-booking-bot",
+  "version": "1.0.0",
+  "description": "Бот для Facebook Messenger: запись клиентов, услуги и цены, адрес",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "express": "^4.19.2" }
+}
