@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const cfg = require("./config");
+const cal = require("./calendar");
 
 const PAGE_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
@@ -50,6 +51,39 @@ function saveBooking(b) {
   fs.writeFileSync(BOOKINGS_FILE, JSON.stringify(list, null, 2));
 }
 
+const CONFIRM_BTNS = [{ title: "Подтвердить", payload: "CONFIRM" }, { title: "Отменить", payload: "CANCEL" }];
+const svcByName = (n) => cfg.services.find((s) => s.name === n) || { name: n, duration: 60 };
+
+async function offerDays(psid, s) {
+  const svc = svcByName(s.data.service);
+  try {
+    s.slots = await cal.getFreeSlots(cfg, svc.duration || 60);
+  } catch (e) {
+    console.error("Calendar error:", e.message);
+    s.manual = true; s.step = "date";
+    return send(psid, "Не получилось загрузить расписание. Напишите, пожалуйста, желаемый день (например: завтра или 20 ноября).");
+  }
+  const days = Object.keys(s.slots).slice(0, 12);
+  if (!days.length) {
+    sessions.delete(psid);
+    return send(psid, `К сожалению, свободных окон на ближайшие дни нет. Позвоните нам: ${cfg.phone}`, MENU);
+  }
+  s.step = "day";
+  return send(psid, "Выберите удобный день:",
+    days.map((d) => ({ title: cal.dayLabel(d), payload: "DAY:" + d })));
+}
+
+async function offerTimes(psid, s, offset) {
+  const all = s.slots[s.data.dateKey] || [];
+  const PAGE = 9;
+  const page = all.slice(offset, offset + PAGE);
+  const qr = page.map((t) => ({ title: t, payload: "TIME:" + t }));
+  if (offset + PAGE < all.length) qr.push({ title: "Ещё время ▶", payload: "MORE:" + (offset + PAGE) });
+  qr.push({ title: "Другой день", payload: "DAYS" });
+  s.step = "time";
+  return send(psid, `${cal.dayLabel(s.data.dateKey)}: выберите время`, qr);
+}
+
 async function handle(psid, text, payload) {
   const key = (payload || text || "").trim();
   const low = key.toLowerCase();
@@ -72,45 +106,90 @@ async function handle(psid, text, payload) {
   }
 
   const s = sessions.get(psid);
-  if (s) {
-    if (payload === "CANCEL") {
-      sessions.delete(psid);
-      return send(psid, "Запись отменена. Если передумаете, нажмите «Записаться».", MENU);
+  if (!s) return send(psid, "Выберите, пожалуйста, один из вариантов:", MENU);
+
+  if (payload === "CANCEL") {
+    sessions.delete(psid);
+    return send(psid, "Запись отменена. Если передумаете, нажмите «Записаться».", MENU);
+  }
+
+  if (s.step === "service") {
+    const name = payload && payload.startsWith("SVC:") ? payload.slice(4) : text;
+    s.data.service = name;
+    if (cal.isConfigured()) return offerDays(psid, s);
+    s.step = "date";
+    return send(psid, "На какой день вам удобно? (например: завтра или 20 ноября)");
+  }
+
+  // ----- выбор из календаря -----
+  if (s.step === "day") {
+    if (payload && payload.startsWith("DAY:")) {
+      s.data.dateKey = payload.slice(4);
+      s.data.date = cal.dayLabel(s.data.dateKey);
+      return offerTimes(psid, s, 0);
     }
-    if (s.step === "service") {
-      const name = payload && payload.startsWith("SVC:") ? payload.slice(4) : text;
-      s.data.service = name; s.step = "date";
-      return send(psid, "На какой день вам удобно? (например: завтра или 20 ноября)");
-    }
-    if (s.step === "date") {
-      s.data.date = text; s.step = "time";
-      return send(psid, "В какое время? (например: 15:00)");
-    }
-    if (s.step === "time") {
-      s.data.time = text; s.step = "contact";
+    return offerDays(psid, s);
+  }
+  if (s.step === "time") {
+    if (payload === "DAYS") return offerDays(psid, s);
+    if (payload && payload.startsWith("MORE:")) return offerTimes(psid, s, parseInt(payload.slice(5), 10) || 0);
+    if (payload && payload.startsWith("TIME:")) {
+      s.data.time = payload.slice(5); s.step = "contact";
       return send(psid, "Напишите, пожалуйста, ваше имя и номер телефона.");
     }
-    if (s.step === "contact") {
-      s.data.contact = text; s.step = "confirm";
-      const d = s.data;
-      return send(psid,
-        `Проверьте запись:\nУслуга: ${d.service}\nДата: ${d.date}\nВремя: ${d.time}\nКонтакт: ${d.contact}`,
-        [{ title: "Подтвердить", payload: "CONFIRM" }, { title: "Отменить", payload: "CANCEL" }]);
-    }
-    if (s.step === "confirm") {
-      if (payload === "CONFIRM") {
-        saveBooking({ psid, ...s.data });
-        sessions.delete(psid);
-        if (OWNER_PSID) {
-          const d = s.data;
-          send(OWNER_PSID, `Новая запись: ${d.service}, ${d.date} ${d.time}, ${d.contact}`).catch(() => {});
-        }
-        return send(psid, "Готово! Запись принята, мы вам перезвоним для подтверждения. Спасибо!", MENU);
-      }
-      return send(psid, "Нажмите «Подтвердить» или «Отменить».",
-        [{ title: "Подтвердить", payload: "CONFIRM" }, { title: "Отменить", payload: "CANCEL" }]);
-    }
+    return offerTimes(psid, s, 0);
   }
+
+  // ----- ручной режим (если календарь не подключён или недоступен) -----
+  if (s.step === "date") {
+    s.data.date = text; s.step = "time_manual";
+    return send(psid, "В какое время? (например: 15:00)");
+  }
+  if (s.step === "time_manual") {
+    s.data.time = text; s.step = "contact";
+    return send(psid, "Напишите, пожалуйста, ваше имя и номер телефона.");
+  }
+
+  if (s.step === "contact") {
+    s.data.contact = text; s.step = "confirm";
+    const d = s.data;
+    return send(psid, `Проверьте запись:\nУслуга: ${d.service}\nДата: ${d.date}\nВремя: ${d.time}\nКонтакт: ${d.contact}`, CONFIRM_BTNS);
+  }
+
+  if (s.step === "confirm") {
+    if (payload !== "CONFIRM") return send(psid, "Нажмите «Подтвердить» или «Отменить».", CONFIRM_BTNS);
+    const d = s.data;
+    if (cal.isConfigured() && d.dateKey) {
+      const svc = svcByName(d.service);
+      try {
+        // перепроверяем, что время ещё свободно (его могли занять, пока клиент думал)
+        const fresh = await cal.getFreeSlots(cfg, svc.duration || 60);
+        if (!(fresh[d.dateKey] || []).includes(d.time)) {
+          s.slots = fresh;
+          s.step = "day";
+          await send(psid, "К сожалению, это время только что заняли. Выберите другое:");
+          return offerDays(psid, s);
+        }
+        await cal.createEvent(cfg, {
+          summary: `${d.service} — ${d.contact}`,
+          description: `Запись из Messenger.\nУслуга: ${d.service}\nКонтакт: ${d.contact}\nMessenger ID: ${psid}`,
+          dateStr: d.dateKey, timeStr: d.time, durationMin: svc.duration || 60
+        });
+      } catch (e) {
+        console.error("Create event error:", e.message);
+        sessions.delete(psid);
+        return send(psid, `Не удалось сохранить запись. Пожалуйста, позвоните нам: ${cfg.phone}`, MENU);
+      }
+    } else {
+      saveBooking({ psid, ...d });
+    }
+    sessions.delete(psid);
+    if (OWNER_PSID) {
+      send(OWNER_PSID, `Новая запись: ${d.service}, ${d.date} ${d.time}, ${d.contact}`).catch(() => {});
+    }
+    return send(psid, "Готово! Вы записаны. Ждём вас! Если планы изменятся, напишите нам заранее.", MENU);
+  }
+
   return send(psid, "Выберите, пожалуйста, один из вариантов:", MENU);
 }
 
