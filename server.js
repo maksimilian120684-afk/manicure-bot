@@ -5,6 +5,7 @@ const path = require("path");
 const express = require("express");
 const cfg = require("./config");
 const cal = require("./calendar");
+const T = require("./texts");
 
 const PAGE_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
@@ -20,6 +21,7 @@ app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
 const API = "https://graph.facebook.com/v21.0/me";
 const GRAPH = API + "/messages";
 const baseUrl = () => (process.env.RENDER_EXTERNAL_URL || cfg.publicUrl || "").replace(/\/$/, "");
+const img = (name) => (baseUrl() ? `${baseUrl()}/img/${name}` : undefined);
 
 function qrs(list) {
   return (list || []).slice(0, 13).map((q) => ({
@@ -45,46 +47,68 @@ async function send(psid, text, quickReplies) {
   return sendRaw(psid, message);
 }
 
-const MENU = [
-  { title: "Записаться", payload: "BOOK" },
-  { title: "Работы мастера", payload: "PORTFOLIO" },
-  { title: "Услуги и цены", payload: "PRICES" },
-  { title: "Адрес и часы", payload: "INFO" }
-];
+// Карточки: одна или несколько плашек с картинкой, заголовком, подписью и кнопками
+function card(image, title, subtitle, buttons) {
+  const el = { title: title.slice(0, 80), buttons: buttons.slice(0, 3) };
+  if (subtitle) el.subtitle = subtitle.slice(0, 80);
+  if (image) el.image_url = image;
+  return el;
+}
+async function sendCards(psid, elements, quick) {
+  const message = { attachment: { type: "template", payload: { template_type: "generic", elements: elements.slice(0, 10) } } };
+  if (quick && quick.length) message.quick_replies = qrs(quick);
+  return sendRaw(psid, message);
+}
 
-// Красивая карточка с обложкой и кнопками
+const pb = (title, payload) => ({ type: "postback", title: title.slice(0, 20), payload });
+const MENU = [
+  { title: T.btn.book, payload: "BOOK" },
+  { title: T.btn.portfolio, payload: "PORTFOLIO" },
+  { title: T.btn.prices, payload: "PRICES" },
+  { title: T.btn.info, payload: "INFO" }
+];
+const menuExcept = (p) => MENU.filter((m) => m.payload !== p);
+
+// Главная карточка
 async function sendMenu(psid) {
   const buttons = [
-    { type: "postback", title: "Записаться", payload: "BOOK" },
-    cfg.portfolioUrl
-      ? { type: "web_url", url: cfg.portfolioUrl, title: "Работы мастера" }
-      : { type: "postback", title: "Услуги и цены", payload: "PRICES" },
-    { type: "postback", title: "Услуги и цены", payload: "PRICES" }
-  ].slice(0, 3);
-  const element = { title: cfg.businessName, subtitle: (cfg.tagline || "").slice(0, 80), buttons };
-  if (baseUrl()) element.image_url = baseUrl() + "/cover.jpg";
-  const quick = [{ title: "Адрес и часы", payload: "INFO" }];
-  const ok = await sendRaw(psid, {
-    attachment: { type: "template", payload: { template_type: "generic", elements: [element] } },
-    quick_replies: qrs(quick)
-  });
+    pb(T.btn.book, "BOOK"),
+    cfg.portfolioUrl ? { type: "web_url", url: cfg.portfolioUrl, title: T.btn.portfolio } : pb(T.btn.prices, "PRICES"),
+    pb(T.btn.prices, "PRICES")
+  ];
+  const ok = await sendCards(psid, [card(img("cover.jpg"), cfg.businessName, cfg.tagline, buttons)], [{ title: T.btn.info, payload: "INFO" }]);
   if (!ok) return send(psid, cfg.greeting, MENU); // запасной вариант: обычное меню кнопками
 }
 
+// Каталог услуг: красивая плашка на каждую услугу
+async function sendServices(psid) {
+  const els = cfg.services.slice(0, 10).map((s, i) =>
+    card(img(`svc-${i}.jpg`), `💅 ${s.name}`, `${s.price} • ${s.duration || 60} min`, [pb(T.btn.choose, "SVC:" + i)]));
+  const ok = await sendCards(psid, els, menuExcept("BOOK").filter((m) => m.payload !== "PRICES"));
+  if (!ok) {
+    const lines = cfg.services.map((s) => `• ${s.name} — ${s.price}`).join("\n");
+    return send(psid, lines, MENU);
+  }
+}
+
+async function sendInfo(psid) {
+  const phone = (cfg.phone || "").replace(/[^\d+]/g, "");
+  const buttons = [
+    { type: "web_url", url: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(cfg.address), title: T.btn.map },
+    ...(phone ? [{ type: "phone_number", title: T.btn.call, payload: phone }] : []),
+    pb(T.btn.menu, "MENU")
+  ];
+  const ok = await sendCards(psid, [card(img("info.jpg"), cfg.businessName, T.infoSub(cfg), buttons)], menuExcept("INFO"));
+  if (!ok) return send(psid, `📍 ${cfg.address}\n🕒 ${cfg.hours}\n📞 ${cfg.phone}`, MENU);
+}
+
 async function sendPortfolio(psid) {
-  if (!cfg.portfolioUrl) return send(psid, "Работы мастера скоро появятся здесь.", MENU);
-  const ok = await sendRaw(psid, {
-    attachment: {
-      type: "template",
-      payload: {
-        template_type: "button",
-        text: "Работы мастера: фото на нашей странице 💅",
-        buttons: [{ type: "web_url", url: cfg.portfolioUrl, title: "Смотреть работы" }]
-      }
-    },
-    quick_replies: qrs(MENU.filter((m) => m.payload !== "PORTFOLIO"))
-  });
-  if (!ok) return send(psid, `Работы мастера: ${cfg.portfolioUrl}`, MENU);
+  if (!cfg.portfolioUrl) return send(psid, T.portfolioSoon, MENU);
+  const ok = await sendCards(psid,
+    [card(img("portfolio.jpg"), "📸 " + T.btn.portfolio.replace("📸 ", ""), T.portfolioText,
+      [{ type: "web_url", url: cfg.portfolioUrl, title: T.btn.seeWorks }, pb(T.btn.book, "BOOK")])],
+    menuExcept("PORTFOLIO"));
+  if (!ok) return send(psid, `${T.portfolioText} ${cfg.portfolioUrl}`, MENU);
 }
 
 // Стартовый экран чата: приветствие, кнопка «Начать», постоянное меню рядом с полем ввода
@@ -96,23 +120,27 @@ async function setupProfile() {
       locale: "default",
       composer_input_disabled: false,
       call_to_actions: [
-        { type: "postback", title: "Записаться", payload: "BOOK" },
-        ...(cfg.portfolioUrl ? [{ type: "web_url", title: "Работы мастера", url: cfg.portfolioUrl }] : []),
-        { type: "postback", title: "Услуги и цены", payload: "PRICES" },
-        { type: "postback", title: "Адрес и часы", payload: "INFO" }
+        pb(T.btn.book, "BOOK"),
+        ...(cfg.portfolioUrl ? [{ type: "web_url", title: T.btn.portfolio, url: cfg.portfolioUrl }] : []),
+        pb(T.btn.prices, "PRICES"),
+        pb(T.btn.info, "INFO")
       ]
     }]
   };
-  try {
-    const res = await fetch(`${API}/messenger_profile?access_token=${encodeURIComponent(PAGE_TOKEN)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    console.log("Профиль чата:", res.status, await res.text());
-  } catch (e) {
-    console.error("Профиль чата не настроен:", e.message);
-  }
+  const post = async (b, label) => {
+    try {
+      const res = await fetch(`${API}/messenger_profile?access_token=${encodeURIComponent(PAGE_TOKEN)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(b)
+      });
+      console.log(label, res.status, await res.text());
+    } catch (e) {
+      console.error(label + " не настроен:", e.message);
+    }
+  };
+  await post(body, "Профиль чата:");
+  if (baseUrl().startsWith("https://")) await post({ whitelisted_domains: [baseUrl()] }, "Домены:");
 }
 
 // ---------- состояние диалога (в памяти) ----------
@@ -125,82 +153,131 @@ function saveBooking(b) {
   fs.writeFileSync(BOOKINGS_FILE, JSON.stringify(list, null, 2));
 }
 
-const CONFIRM_BTNS = [{ title: "Подтвердить", payload: "CONFIRM" }, { title: "Отменить", payload: "CANCEL" }];
-const svcByName = (n) => cfg.services.find((s) => s.name === n) || { name: n, duration: 60 };
+const svcByName = (n) => cfg.services.find((s) => s.name === n) || { name: n, duration: 60, price: "" };
 
+// ---------- ссылка на веб-календарь (подписанная, живёт 40 минут) ----------
+const SECRET = () => APP_SECRET || VERIFY_TOKEN || "dev-secret";
+const b64u = (s) => Buffer.from(s).toString("base64url");
+function signToken(obj) {
+  const body = b64u(JSON.stringify({ ...obj, e: Date.now() + 40 * 60 * 1000 }));
+  const sig = crypto.createHmac("sha256", SECRET()).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+function verifyToken(tok) {
+  if (typeof tok !== "string" || !tok.includes(".")) return null;
+  const [body, sig] = tok.split(".");
+  const expected = crypto.createHmac("sha256", SECRET()).update(body).digest("base64url");
+  const a = Buffer.from(sig || ""), b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const o = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    return o.e > Date.now() ? o : null;
+  } catch (_) { return null; }
+}
+
+async function offerCalendar(psid, s) {
+  const svc = svcByName(s.data.service);
+  s.step = "calendar";
+  if (!baseUrl()) return offerDays(psid, s);
+  const url = `${baseUrl()}/book?t=${signToken({ p: psid, s: svc.name })}`;
+  const ok = await sendCards(psid, [card(img("calendar.jpg"), T.calendarTitle, T.calendarSub(svc), [
+    { type: "web_url", url, title: T.btn.openCalendar, webview_height_ratio: "tall" },
+    pb(T.btn.changeService, "BOOK")
+  ])]);
+  if (!ok) return offerDays(psid, s);
+}
+
+// ---------- запасной вариант без веб-страницы: кнопки с днями ----------
 async function offerDays(psid, s) {
   const svc = svcByName(s.data.service);
   try {
     s.slots = await cal.getFreeSlots(cfg, svc.duration || 60);
   } catch (e) {
     console.error("Calendar error:", e.message);
-    s.manual = true; s.step = "date";
-    return send(psid, "Не получилось загрузить расписание. Напишите, пожалуйста, желаемый день (например: завтра или 20 ноября).");
+    s.step = "date";
+    return send(psid, T.calendarFail);
   }
   const days = Object.keys(s.slots).slice(0, 12);
   if (!days.length) {
     sessions.delete(psid);
-    return send(psid, `К сожалению, свободных окон на ближайшие дни нет. Позвоните нам: ${cfg.phone}`, MENU);
+    return send(psid, T.noSlots(cfg.phone), MENU);
   }
   s.step = "day";
-  return send(psid, "Выберите удобный день:",
-    days.map((d) => ({ title: cal.dayLabel(d), payload: "DAY:" + d })));
+  return send(psid, T.chooseDay, days.map((d) => ({ title: cal.dayLabel(d), payload: "DAY:" + d })));
 }
 
 async function offerTimes(psid, s, offset) {
   const all = s.slots[s.data.dateKey] || [];
   const PAGE = 9;
-  const page = all.slice(offset, offset + PAGE);
-  const qr = page.map((t) => ({ title: t, payload: "TIME:" + t }));
-  if (offset + PAGE < all.length) qr.push({ title: "Ещё время ▶", payload: "MORE:" + (offset + PAGE) });
-  qr.push({ title: "Другой день", payload: "DAYS" });
+  const qr = all.slice(offset, offset + PAGE).map((t) => ({ title: t, payload: "TIME:" + t }));
+  if (offset + PAGE < all.length) qr.push({ title: T.moreTimes, payload: "MORE:" + (offset + PAGE) });
+  qr.push({ title: T.otherDay, payload: "DAYS" });
   s.step = "time";
-  return send(psid, `${cal.dayLabel(s.data.dateKey)}: выберите время`, qr);
+  return send(psid, T.chooseTime(cal.dayLabel(s.data.dateKey)), qr);
 }
+
+async function askConfirm(psid, s) {
+  const d = s.data;
+  s.step = "confirm";
+  const ok = await sendCards(psid, [card(img("confirm.jpg"), T.confirmTitle, T.confirmSub(d), [
+    pb(T.btn.confirm, "CONFIRM"), pb(T.btn.changeDate, "CHANGEDATE"), pb(T.btn.cancel, "CANCEL")
+  ])]);
+  if (!ok) return send(psid, `${T.confirmTitle}\n${d.service}\n${d.date}, ${d.time}\n${d.contact}`,
+    [{ title: T.btn.confirm, payload: "CONFIRM" }, { title: T.btn.cancel, payload: "CANCEL" }]);
+}
+
+const GREETINGS = ["меню", "menu", "start", "cześć", "czesc", "hej", "witam", "dzień dobry", "dzien dobry", "привет", "здравствуйте", "/start"];
 
 async function handle(psid, text, payload) {
   const key = (payload || text || "").trim();
   const low = key.toLowerCase();
 
-  if (!key || ["меню", "menu", "start", "привет", "здравствуйте", "/start"].includes(low) || payload === "MENU" || payload === "GET_STARTED") {
+  if (!key || GREETINGS.includes(low) || payload === "MENU" || payload === "GET_STARTED") {
     sessions.delete(psid);
     return sendMenu(psid);
   }
   if (payload === "PORTFOLIO") return sendPortfolio(psid);
-  if (payload === "PRICES") {
-    const lines = cfg.services.map((s) => `• ${s.name} — ${s.price}`).join("\n");
-    return send(psid, `Наши услуги:\n${lines}`, MENU);
-  }
-  if (payload === "INFO") {
-    return send(psid, `📍 ${cfg.address}\n🕒 ${cfg.hours}\n📞 ${cfg.phone}`, MENU);
-  }
+  if (payload === "PRICES") { await send(psid, T.pricesIntro); return sendServices(psid); }
+  if (payload === "INFO") return sendInfo(psid);
   if (payload === "BOOK") {
     sessions.set(psid, { step: "service", data: {} });
-    return send(psid, "На какую услугу хотите записаться?",
-      cfg.services.map((s) => ({ title: s.name, payload: "SVC:" + s.name })));
+    await send(psid, T.bookIntro);
+    return sendServices(psid);
+  }
+  if (payload && payload.startsWith("SVC:")) {
+    const svc = cfg.services[parseInt(payload.slice(4), 10)];
+    if (!svc) return sendServices(psid);
+    const s = { step: "calendar", data: { service: svc.name } };
+    sessions.set(psid, s);
+    if (cal.isConfigured()) return offerCalendar(psid, s);
+    s.step = "date";
+    return send(psid, T.askDateManual);
   }
 
   const s = sessions.get(psid);
-  if (!s) return send(psid, "Выберите, пожалуйста, один из вариантов:", MENU);
+  if (!s) return send(psid, T.pickOne, MENU);
 
   if (payload === "CANCEL") {
     sessions.delete(psid);
-    return send(psid, "Запись отменена. Если передумаете, нажмите «Записаться».", MENU);
+    return send(psid, T.cancelled, MENU);
   }
+  if (payload === "CHANGEDATE") return cal.isConfigured() ? offerCalendar(psid, s) : (s.step = "date", send(psid, T.askDateManual));
 
   if (s.step === "service") {
-    const name = payload && payload.startsWith("SVC:") ? payload.slice(4) : text;
-    s.data.service = name;
-    if (cal.isConfigured()) return offerDays(psid, s);
-    s.step = "date";
-    return send(psid, "На какой день вам удобно? (например: завтра или 20 ноября)");
+    const found = cfg.services.findIndex((x) => x.name.toLowerCase() === low);
+    if (found >= 0) return handle(psid, "", "SVC:" + found);
+    return sendServices(psid);
   }
 
-  // ----- выбор из календаря -----
+  // ----- выбор даты в веб-календаре: пока клиент выбирает, любое сообщение просто повторяет кнопку -----
+  if (s.step === "calendar") return offerCalendar(psid, s);
+
+  // ----- запасной вариант: даты и время кнопками -----
   if (s.step === "day") {
     if (payload && payload.startsWith("DAY:")) {
       s.data.dateKey = payload.slice(4);
-      s.data.date = cal.dayLabel(s.data.dateKey);
+      s.data.date = T.dayLong(s.data.dateKey);
+      s.data.shortDate = T.dayShort(s.data.dateKey);
       return offerTimes(psid, s, 0);
     }
     return offerDays(psid, s);
@@ -210,29 +287,28 @@ async function handle(psid, text, payload) {
     if (payload && payload.startsWith("MORE:")) return offerTimes(psid, s, parseInt(payload.slice(5), 10) || 0);
     if (payload && payload.startsWith("TIME:")) {
       s.data.time = payload.slice(5); s.step = "contact";
-      return send(psid, "Напишите, пожалуйста, ваше имя и номер телефона.");
+      return send(psid, T.askContact);
     }
     return offerTimes(psid, s, 0);
   }
 
   // ----- ручной режим (если календарь не подключён или недоступен) -----
   if (s.step === "date") {
-    s.data.date = text; s.step = "time_manual";
-    return send(psid, "В какое время? (например: 15:00)");
+    s.data.date = text; s.data.shortDate = text; s.step = "time_manual";
+    return send(psid, T.askTimeManual);
   }
   if (s.step === "time_manual") {
     s.data.time = text; s.step = "contact";
-    return send(psid, "Напишите, пожалуйста, ваше имя и номер телефона.");
+    return send(psid, T.askContact);
   }
 
   if (s.step === "contact") {
-    s.data.contact = text; s.step = "confirm";
-    const d = s.data;
-    return send(psid, `Проверьте запись:\nУслуга: ${d.service}\nДата: ${d.date}\nВремя: ${d.time}\nКонтакт: ${d.contact}`, CONFIRM_BTNS);
+    s.data.contact = text;
+    return askConfirm(psid, s);
   }
 
   if (s.step === "confirm") {
-    if (payload !== "CONFIRM") return send(psid, "Нажмите «Подтвердить» или «Отменить».", CONFIRM_BTNS);
+    if (payload !== "CONFIRM") return send(psid, T.tapConfirm, [{ title: T.btn.confirm, payload: "CONFIRM" }, { title: T.btn.cancel, payload: "CANCEL" }]);
     const d = s.data;
     if (cal.isConfigured() && d.dateKey) {
       const svc = svcByName(d.service);
@@ -240,37 +316,85 @@ async function handle(psid, text, payload) {
         // перепроверяем, что время ещё свободно (его могли занять, пока клиент думал)
         const fresh = await cal.getFreeSlots(cfg, svc.duration || 60);
         if (!(fresh[d.dateKey] || []).includes(d.time)) {
-          s.slots = fresh;
-          s.step = "day";
-          await send(psid, "К сожалению, это время только что заняли. Выберите другое:");
-          return offerDays(psid, s);
+          await send(psid, T.slotTaken);
+          return offerCalendar(psid, s);
         }
         await cal.createEvent(cfg, {
           summary: `${d.service} — ${d.contact}`,
-          description: `Запись из Messenger.\nУслуга: ${d.service}\nКонтакт: ${d.contact}\nMessenger ID: ${psid}`,
+          description: `Rezerwacja z Messengera.\nUsługa: ${d.service}\nKontakt: ${d.contact}\nMessenger ID: ${psid}`,
           dateStr: d.dateKey, timeStr: d.time, durationMin: svc.duration || 60
         });
       } catch (e) {
         console.error("Create event error:", e.message);
         sessions.delete(psid);
-        return send(psid, `Не удалось сохранить запись. Пожалуйста, позвоните нам: ${cfg.phone}`, MENU);
+        return send(psid, T.saveFail(cfg.phone), MENU);
       }
     } else {
       saveBooking({ psid, ...d });
     }
     sessions.delete(psid);
-    if (OWNER_PSID) {
-      send(OWNER_PSID, `Новая запись: ${d.service}, ${d.date} ${d.time}, ${d.contact}`).catch(() => {});
-    }
-    return send(psid, "Готово! Вы записаны. Ждём вас! Если планы изменятся, напишите нам заранее.", MENU);
+    if (OWNER_PSID) send(OWNER_PSID, T.ownerNew(d)).catch(() => {});
+    const ok = await sendCards(psid, [card(img("success.jpg"), T.successTitle, T.successSub(d), [pb(T.btn.info, "INFO"), pb(T.btn.menu, "MENU")])]);
+    if (!ok) return send(psid, `${T.successTitle} ${T.success}`, MENU);
+    return send(psid, T.success);
   }
 
-  return send(psid, "Выберите, пожалуйста, один из вариантов:", MENU);
+  return send(psid, T.pickOne, MENU);
 }
 
+// ---------- веб-календарь (открывается кнопкой из чата) ----------
+app.get("/img/:file", (req, res) => {
+  if (!/^[\w-]+\.jpg$/.test(req.params.file)) return res.sendStatus(404);
+  res.set("Cache-Control", "public, max-age=3600");
+  res.sendFile(path.join(__dirname, "img_" + req.params.file), (err) => { if (err && !res.headersSent) res.sendStatus(404); });
+});
+app.get("/cover.jpg", (_req, res) => res.sendFile(path.join(__dirname, "img_cover.jpg")));
+app.get("/book", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.sendFile(path.join(__dirname, "book.html"));
+});
+
+app.get("/api/slots", async (req, res) => {
+  const tok = verifyToken(req.query.t);
+  if (!tok) return res.status(401).json({ error: "expired" });
+  const svc = svcByName(tok.s);
+  try {
+    const days = await cal.getFreeSlots(cfg, svc.duration || 60);
+    const lp = cal.localParts(Date.now(), cfg.timezone);
+    const pad = (n) => String(n).padStart(2, "0");
+    res.json({
+      business: cfg.businessName,
+      service: { name: svc.name, price: svc.price, duration: svc.duration || 60 },
+      today: `${lp.y}-${pad(lp.m)}-${pad(lp.d)}`,
+      daysAhead: cfg.daysAhead,
+      days
+    });
+  } catch (e) {
+    console.error("slots error:", e.message);
+    res.status(500).json({ error: "calendar" });
+  }
+});
+
+app.post("/api/pick", async (req, res) => {
+  const tok = verifyToken(req.body && req.body.t);
+  if (!tok) return res.status(401).json({ error: "expired" });
+  const { dateKey, time } = req.body;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey || "") || !/^\d{2}:\d{2}$/.test(time || "")) return res.status(400).json({ error: "bad" });
+  const svc = svcByName(tok.s);
+  try {
+    const fresh = await cal.getFreeSlots(cfg, svc.duration || 60);
+    if (!(fresh[dateKey] || []).includes(time)) return res.status(409).json({ error: "taken" });
+  } catch (e) {
+    return res.status(500).json({ error: "calendar" });
+  }
+  const data = { service: svc.name, dateKey, time, date: T.dayLong(dateKey), shortDate: T.dayShort(dateKey) };
+  sessions.set(tok.p, { step: "contact", data });
+  res.json({ ok: true, date: data.date, time });
+  send(tok.p, `${T.selected(data)}\n\n${T.askContact}`).catch((e) => console.error("pick send error:", e));
+});
+
 // ---------- webhook ----------
-app.get("/cover.jpg", (_req, res) => res.sendFile(path.join(__dirname, "cover.jpg")));
-app.get("/", (_req, res) => res.send(`${cfg.businessName}: бот работает`));
+app.get("/", (_req, res) => res.send(`${cfg.businessName}: bot działa`));
 
 app.get("/webhook", (req, res) => {
   if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === VERIFY_TOKEN) {
@@ -294,6 +418,7 @@ app.post("/webhook", (req, res) => {
   for (const entry of req.body.entry || []) {
     for (const ev of entry.messaging || []) {
       if (!ev.sender) continue;
+      console.log("Событие от клиента:", ev.postback ? "postback " + ev.postback.payload : ev.message ? "сообщение" : "другое");
       // нажатие кнопки в карточке/меню или «Начать» (в нём может быть метка источника ref)
       if (ev.postback) {
         const ref = (ev.postback.referral && ev.postback.referral.ref) || "";
@@ -321,4 +446,4 @@ if (require.main === module) {
     if (PAGE_TOKEN) setupProfile();
   });
 }
-module.exports = { app, handle, sendMenu, setupProfile };
+module.exports = { app, handle, sendMenu, setupProfile, signToken, verifyToken };

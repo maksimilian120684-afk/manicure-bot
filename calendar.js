@@ -6,7 +6,7 @@ const SCOPE = "https://www.googleapis.com/auth/calendar";
 let cachedToken = null; // { token, exp }
 
 function isConfigured() {
-  return Boolean(process.env.GOOGLE_SERVICE_ACCOUNT && process.env.GOOGLE_CALENDAR_ID);
+  return Boolean(process.env.MOCK_CALENDAR || (process.env.GOOGLE_SERVICE_ACCOUNT && process.env.GOOGLE_CALENDAR_ID));
 }
 
 function getCreds() {
@@ -79,7 +79,7 @@ function localParts(utcMs, tz) {
 }
 const pad = (n) => String(n).padStart(2, "0");
 const dateKey = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
-const DAY_NAMES = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+const texts = require("./texts");
 
 // ---------- свободные слоты ----------
 // Возвращает { "2026-11-16": ["10:00","11:00",...], ... } только для дней, где есть свободное время
@@ -95,13 +95,23 @@ async function getFreeSlots(cfg, durationMin, nowMs = Date.now()) {
   const first = days[0], last = days[days.length - 1];
   const timeMin = new Date(zonedToUtcMs(first.y, first.m, first.d, 0, 0, tz)).toISOString();
   const timeMax = new Date(zonedToUtcMs(last.y, last.m, last.d, 23, 59, tz)).toISOString();
-  const fb = await gfetch("https://www.googleapis.com/calendar/v3/freeBusy", {
-    method: "POST",
-    body: JSON.stringify({ timeMin, timeMax, timeZone: tz, items: [{ id: process.env.GOOGLE_CALENDAR_ID }] })
-  });
-  const cal = (fb.calendars || {})[process.env.GOOGLE_CALENDAR_ID] || {};
-  if (cal.errors && cal.errors.length) throw new Error("Calendar access error: " + JSON.stringify(cal.errors));
-  const busy = (cal.busy || []).map((b) => [Date.parse(b.start), Date.parse(b.end)]);
+  let busy;
+  if (process.env.MOCK_CALENDAR) {
+    // только для локальной проверки: часть времени «занята»
+    busy = [];
+    for (const day of days) {
+      if ((day.d * 7 + day.m) % 5 === 0) busy.push([zonedToUtcMs(day.y, day.m, day.d, 0, 0, tz), zonedToUtcMs(day.y, day.m, day.d, 23, 59, tz)]);
+      else if ((day.d + day.m) % 3 === 0) busy.push([zonedToUtcMs(day.y, day.m, day.d, 12, 0, tz), zonedToUtcMs(day.y, day.m, day.d, 15, 0, tz)]);
+    }
+  } else {
+    const fb = await gfetch("https://www.googleapis.com/calendar/v3/freeBusy", {
+      method: "POST",
+      body: JSON.stringify({ timeMin, timeMax, timeZone: tz, items: [{ id: process.env.GOOGLE_CALENDAR_ID }] })
+    });
+    const cal = (fb.calendars || {})[process.env.GOOGLE_CALENDAR_ID] || {};
+    if (cal.errors && cal.errors.length) throw new Error("Calendar access error: " + JSON.stringify(cal.errors));
+    busy = (cal.busy || []).map((b) => [Date.parse(b.start), Date.parse(b.end)]);
+  }
 
   const result = {};
   const earliest = nowMs + cfg.minLeadHours * 3600000;
@@ -128,6 +138,7 @@ async function createEvent(cfg, { summary, description, dateStr, timeStr, durati
   const [h, mi] = timeStr.split(":").map(Number);
   const startMs = zonedToUtcMs(y, m, d, h, mi, cfg.timezone);
   const endMs = startMs + durationMin * 60000;
+  if (process.env.MOCK_CALENDAR) return { mock: true, startMs, endMs, summary };
   const id = encodeURIComponent(process.env.GOOGLE_CALENDAR_ID);
   return gfetch(`https://www.googleapis.com/calendar/v3/calendars/${id}/events`, {
     method: "POST",
@@ -139,10 +150,6 @@ async function createEvent(cfg, { summary, description, dateStr, timeStr, durati
   });
 }
 
-function dayLabel(dateStr) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const wd = new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay();
-  return `${DAY_NAMES[wd]} ${pad(d)}.${pad(m)}`;
-}
+const dayLabel = (dateStr) => texts.dayShort(dateStr);
 
 module.exports = { isConfigured, getFreeSlots, createEvent, dayLabel, zonedToUtcMs, localParts };

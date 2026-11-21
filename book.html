@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1B0B2E">
+<link rel="icon" href="data:,">
+<title>Wybierz termin</title>
+<style>
+  :root{
+    --plum:#1B0B2E; --violet:#7C3AED; --magenta:#C026D3; --pink:#F472B6;
+    --gold1:#FDE68A; --gold2:#F59E0B; --ink:#2A1038; --soft:#F3EAF8; --mute:#B9A3CB;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0}
+  body{
+    min-height:100vh; color:#fff; touch-action:manipulation;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    background:radial-gradient(120% 60% at 100% 0%,#B5179E 0%,rgba(181,23,158,0) 60%),
+               radial-gradient(100% 50% at 0% 30%,#5B21B6 0%,rgba(91,33,182,0) 60%),
+               linear-gradient(180deg,#1B0B2E,#2A0F4A);
+    background-attachment:fixed;
+    padding:18px 14px calc(120px + env(safe-area-inset-bottom));
+  }
+  .wrap{max-width:520px;margin:0 auto}
+  .brand{font-size:12px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:var(--gold1)}
+  h1{margin:6px 0 12px;font-size:30px;line-height:1.1;font-weight:900;letter-spacing:-.01em}
+  .chip{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);
+        border-radius:999px;padding:8px 14px;font-weight:700;font-size:14px;backdrop-filter:blur(6px)}
+  .chip b{color:var(--gold1)}
+  .steps{display:flex;gap:8px;margin:16px 0 14px}
+  .step{flex:1;height:6px;border-radius:6px;background:rgba(255,255,255,.2);overflow:hidden}
+  .step i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--gold1),var(--gold2));transition:width .35s}
+  .step.on i{width:100%}
+
+  .card{background:#fff;color:var(--ink);border-radius:28px;padding:16px 14px 14px;margin-bottom:16px;
+        box-shadow:0 18px 40px rgba(10,0,30,.45)}
+  .mhead{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 12px}
+  .mname{font-size:22px;font-weight:900;letter-spacing:-.01em}
+  .arrow{width:46px;height:46px;border-radius:50%;border:0;color:#fff;font-size:22px;font-weight:900;cursor:pointer;
+         background:linear-gradient(145deg,var(--pink),var(--magenta) 60%,var(--violet));box-shadow:0 6px 14px rgba(192,38,211,.4)}
+  .arrow:disabled{background:var(--soft);color:#CDBBDB;box-shadow:none;cursor:default}
+  .wd,.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+  .wd div{text-align:center;font-size:12px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;color:#9B7BB3;padding:2px 0 8px}
+  .wd div:nth-child(6),.wd div:nth-child(7){color:var(--pink)}
+  .d{aspect-ratio:1/1;border:0;border-radius:15px;font-weight:900;font-size:20px;line-height:1;font-variant-numeric:tabular-nums;
+     display:grid;place-items:center;position:relative;padding:0;background:transparent;color:#D9CDE4;cursor:default;
+     font-family:inherit}
+  .d.out{font-weight:600;color:#DDD2E8}
+  .d.busy{background:var(--soft);color:#C3B1D1;font-weight:700}
+  .d.free{cursor:pointer;color:#fff;text-shadow:0 1px 2px rgba(60,0,80,.35);
+          background:linear-gradient(145deg,#F472B6 0%,#C026D3 58%,#7C3AED 100%);
+          box-shadow:0 5px 12px rgba(192,38,211,.38);transition:transform .12s}
+  .d.free:active{transform:scale(.93)}
+  .d.today::after{content:"";position:absolute;bottom:5px;left:50%;width:6px;height:6px;margin-left:-3px;border-radius:50%;background:var(--gold2)}
+  .d.today.busy,.d.today.out{box-shadow:inset 0 0 0 3px var(--gold2)}
+  .d.free.today::after{background:var(--gold1)}
+  .d.sel{color:#3B0764;text-shadow:none;transform:scale(1.08);z-index:1;
+         background:linear-gradient(145deg,var(--gold1),var(--gold2));box-shadow:0 8px 18px rgba(245,158,11,.6),0 0 0 3px #fff}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:14px 4px 2px;font-size:12px;font-weight:700;color:#7D6592}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:14px;height:14px;border-radius:5px;display:inline-block}
+  .lf{background:linear-gradient(145deg,#F472B6,#7C3AED)} .lb{background:var(--soft);box-shadow:inset 0 0 0 1px #E4D5EE} .lt{background:var(--gold2)}
+
+  .thead{font-size:13px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:#9B7BB3;margin:2px 2px 4px}
+  .tday{font-size:21px;font-weight:900;margin:0 2px 12px}
+  .times{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  @media(min-width:420px){.times{grid-template-columns:repeat(4,1fr)}}
+  .t{border:3px solid #D946EF;border-radius:18px;background:#fff;color:#7C1D9E;font-weight:900;font-size:20px;line-height:1;font-family:inherit;
+     font-variant-numeric:tabular-nums;padding:15px 0;cursor:pointer;transition:transform .12s,background .15s}
+  .t:active{transform:scale(.95)}
+  .t.sel{border-color:var(--gold2);color:#3B0764;background:linear-gradient(145deg,var(--gold1),var(--gold2));
+         box-shadow:0 8px 18px rgba(245,158,11,.5)}
+  .hide{display:none}
+
+  .bar{position:fixed;left:0;right:0;bottom:0;padding:26px 14px calc(14px + env(safe-area-inset-bottom));
+       background:linear-gradient(180deg,rgba(27,11,46,0),rgba(27,11,46,.92) 40%)}
+  .go{display:block;width:100%;max-width:520px;margin:0 auto;border:0;border-radius:20px;padding:19px 12px;color:#fff;
+      font-weight:900;font-size:18px;line-height:1.2;font-family:inherit;letter-spacing:.01em;cursor:pointer;
+      background:linear-gradient(135deg,#F472B6,#C026D3 55%,#7C3AED);box-shadow:0 12px 28px rgba(192,38,211,.55)}
+  .go:disabled{background:rgba(255,255,255,.18);color:rgba(255,255,255,.55);box-shadow:none;cursor:default}
+  .go small{display:block;font-weight:700;font-size:13px;opacity:.9;margin-top:4px}
+
+  .msg{text-align:center;padding:60px 10px;font-weight:700}
+  .spin{width:46px;height:46px;margin:0 auto 14px;border-radius:50%;border:5px solid rgba(255,255,255,.25);border-top-color:var(--gold1);animation:s 1s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .toast{position:fixed;left:14px;right:14px;top:14px;max-width:520px;margin:0 auto;background:#fff;color:#B91C1C;border-radius:16px;
+         padding:14px 16px;font-weight:800;box-shadow:0 12px 30px rgba(0,0,0,.4);z-index:9}
+
+  .done{position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:28px;z-index:10;
+        background:radial-gradient(120% 60% at 100% 0%,#B5179E 0%,rgba(181,23,158,0) 60%),linear-gradient(180deg,#1B0B2E,#2A0F4A)}
+  .ok{width:110px;height:110px;border-radius:50%;margin:0 auto 20px;display:grid;place-items:center;font-size:58px;color:#3B0764;
+      background:linear-gradient(145deg,var(--gold1),var(--gold2));box-shadow:0 16px 40px rgba(245,158,11,.5);animation:pop .5s cubic-bezier(.2,1.6,.4,1)}
+  @keyframes pop{from{transform:scale(.3);opacity:0}}
+  .done h2{margin:0 0 8px;font-size:30px;font-weight:900}
+  .done .when{font-size:20px;font-weight:800;color:var(--gold1);margin-bottom:18px}
+  .done p{margin:0 auto;max-width:340px;font-size:16px;line-height:1.45;color:#E9D5FF;font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <div class="msg"><div class="spin"></div>Ładuję wolne terminy…</div>
+</div>
+<div class="bar hide" id="bar"><button class="go" id="go" disabled>Wybierz datę i godzinę</button></div>
+
+<script>
+(function(){
+  var MONTHS=["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
+  var MONTHS_GEN=["stycznia","lutego","marca","kwietnia","maja","czerwca","lipca","sierpnia","września","października","listopada","grudnia"];
+  var WD=["Pn","Wt","Śr","Cz","Pt","Sb","Nd"];
+  var WD_LONG=["niedziela","poniedziałek","wtorek","środa","czwartek","piątek","sobota"];
+  var token=new URLSearchParams(location.search).get("t")||"";
+  var app=document.getElementById("app"), bar=document.getElementById("bar"), go=document.getElementById("go");
+  var S={days:{},today:"",last:"",y:0,m:0,minY:0,minM:0,maxY:0,maxM:0,date:null,time:null,svc:null,biz:""};
+
+  function pad(n){return (n<10?"0":"")+n}
+  function key(y,m,d){return y+"-"+pad(m)+"-"+pad(d)}
+  function parse(k){var p=k.split("-");return {y:+p[0],m:+p[1],d:+p[2]}}
+  function addDays(k,n){var p=parse(k);var t=new Date(Date.UTC(p.y,p.m-1,p.d+n));return key(t.getUTCFullYear(),t.getUTCMonth()+1,t.getUTCDate())}
+  function longLabel(k){var p=parse(k);var wd=new Date(Date.UTC(p.y,p.m-1,p.d,12)).getUTCDay();var t=WD_LONG[wd]+", "+p.d+" "+MONTHS_GEN[p.m-1];return t.charAt(0).toUpperCase()+t.slice(1)}
+  function shortLabel(k){var p=parse(k);var wd=new Date(Date.UTC(p.y,p.m-1,p.d,12)).getUTCDay();return WD[(wd+6)%7]+" "+pad(p.d)+"."+pad(p.m)}
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+
+  function toast(t){var e=document.createElement("div");e.className="toast";e.textContent=t;document.body.appendChild(e);setTimeout(function(){e.remove()},4200)}
+  function fail(t,sub){bar.classList.add("hide");app.innerHTML='<div class="msg"><div style="font-size:52px;margin-bottom:10px">😔</div><div style="font-size:20px;font-weight:900;margin-bottom:8px">'+esc(t)+'</div><div style="opacity:.85">'+esc(sub||"")+'</div></div>'}
+
+  function load(keepSel){
+    return fetch("/api/slots?t="+encodeURIComponent(token)).then(function(r){
+      if(r.status===401) throw new Error("expired");
+      if(!r.ok) throw new Error("server");
+      return r.json();
+    }).then(function(j){
+      S.days=j.days; S.today=j.today; S.last=addDays(j.today,j.daysAhead); S.svc=j.service; S.biz=j.business;
+      var t=parse(S.today), l=parse(S.last);
+      S.minY=t.y;S.minM=t.m;S.maxY=l.y;S.maxM=l.m;
+      if(!keepSel){
+        var first=Object.keys(S.days).sort()[0];
+        var f=parse(first||S.today); S.y=f.y; S.m=f.m;
+        S.date=null;S.time=null;
+      } else if(S.date && !S.days[S.date]){S.date=null;S.time=null}
+      render();
+    });
+  }
+
+  function render(){
+    var h='';
+    h+='<div class="brand">'+esc(S.biz)+'</div><h1>Wybierz termin</h1>';
+    h+='<div class="chip">💅 <b>'+esc(S.svc.name)+'</b> · '+S.svc.duration+' min · '+esc(S.svc.price)+'</div>';
+    h+='<div class="steps"><div class="step on"><i></i></div><div class="step'+(S.date?' on':'')+'"><i></i></div></div>';
+
+    var atMin=(S.y===S.minY&&S.m===S.minM), atMax=(S.y===S.maxY&&S.m===S.maxM);
+    h+='<div class="card"><div class="mhead">'+
+       '<button class="arrow" id="prev"'+(atMin?' disabled':'')+' aria-label="Poprzedni miesiąc">‹</button>'+
+       '<div class="mname">'+MONTHS[S.m-1]+' '+S.y+'</div>'+
+       '<button class="arrow" id="next"'+(atMax?' disabled':'')+' aria-label="Następny miesiąc">›</button></div>';
+    h+='<div class="wd">'+WD.map(function(x){return '<div>'+x+'</div>'}).join('')+'</div><div class="grid">';
+    var first=(new Date(Date.UTC(S.y,S.m-1,1)).getUTCDay()+6)%7;
+    var dim=new Date(Date.UTC(S.y,S.m,0)).getUTCDate();
+    for(var i=0;i<first;i++)h+='<div></div>';
+    for(var d=1;d<=dim;d++){
+      var k=key(S.y,S.m,d), cls="d";
+      var inRange=(k>=S.today&&k<=S.last);
+      if(!inRange)cls+=" out"; else if(S.days[k])cls+=" free"; else cls+=" busy";
+      if(k===S.today)cls+=" today";
+      if(k===S.date)cls+=" sel";
+      h+='<button class="'+cls+'" data-k="'+k+'"'+(S.days[k]&&inRange?'':' disabled')+'>'+d+'</button>';
+    }
+    h+='</div><div class="legend"><span><i class="lf"></i>wolne terminy</span><span><i class="lb"></i>brak terminów</span><span><i class="lt"></i>dziś</span></div></div>';
+
+    if(S.date){
+      h+='<div class="card" id="tcard"><div class="thead">Godzina</div><div class="tday">'+esc(longLabel(S.date))+'</div><div class="times">'+
+         (S.days[S.date]||[]).map(function(t){return '<button class="t'+(t===S.time?' sel':'')+'" data-t="'+t+'">'+t+'</button>'}).join('')+'</div></div>';
+    }
+    app.innerHTML=h; bar.classList.remove("hide");
+    updateBar();
+
+    document.getElementById("prev").onclick=function(){S.m--;if(S.m<1){S.m=12;S.y--}render()};
+    document.getElementById("next").onclick=function(){S.m++;if(S.m>12){S.m=1;S.y++}render()};
+    Array.prototype.forEach.call(app.querySelectorAll(".d.free"),function(b){
+      b.onclick=function(){var firstPick=!S.date;S.date=b.getAttribute("data-k");S.time=null;render();
+        var tc=document.getElementById("tcard"); if(tc)setTimeout(function(){tc.scrollIntoView({behavior:"smooth",block:"center"})},60)}
+    });
+    Array.prototype.forEach.call(app.querySelectorAll(".t"),function(b){
+      b.onclick=function(){S.time=b.getAttribute("data-t");render();
+        window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"})}
+    });
+  }
+
+  function updateBar(){
+    if(S.date&&S.time){go.disabled=false;go.innerHTML='Potwierdź termin<small>'+esc(shortLabel(S.date))+' · '+S.time+'</small>'}
+    else if(S.date){go.disabled=true;go.textContent="Teraz wybierz godzinę"}
+    else{go.disabled=true;go.textContent="Wybierz dzień z kalendarza"}
+  }
+
+  go.onclick=function(){
+    if(!(S.date&&S.time))return;
+    go.disabled=true;go.textContent="Zapisuję…";
+    fetch("/api/pick",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({t:token,dateKey:S.date,time:S.time})})
+    .then(function(r){return r.json().then(function(j){return {s:r.status,j:j}})})
+    .then(function(x){
+      if(x.s===409){toast("Ten termin został właśnie zajęty. Wybierz inny.");return load(true).then(function(){S.time=null;render()})}
+      if(x.s===401){return fail("Link wygasł","Wróć do czatu i kliknij „Wybierz termin” jeszcze raz.")}
+      if(x.s!==200)throw new Error("fail");
+      bar.classList.add("hide");
+      var d=document.createElement("div");d.className="done";
+      d.innerHTML='<div><div class="ok">✓</div><h2>Termin wybrany!</h2><div class="when">'+esc(x.j.date)+' · '+esc(x.j.time)+'</div>'+
+        '<p>Wróć do czatu w Messengerze i napisz swoje imię oraz numer telefonu. Okno możesz zamknąć (✕ u góry).</p></div>';
+      document.body.appendChild(d);
+      try{ if(window.MessengerExtensions&&MessengerExtensions.requestCloseBrowser)MessengerExtensions.requestCloseBrowser() }catch(e){}
+      setTimeout(function(){try{window.close()}catch(e){}},2500);
+    }).catch(function(){toast("Coś poszło nie tak. Spróbuj jeszcze raz.");updateBar()});
+  };
+
+  if(!token){fail("Brak linku","Otwórz kalendarz przyciskiem w czacie.");return}
+  load(false).catch(function(e){
+    if(e.message==="expired")fail("Link wygasł","Wróć do czatu i kliknij „Wybierz termin” jeszcze raz.");
+    else fail("Nie udało się wczytać terminów","Spróbuj ponownie za chwilę.");
+  });
+})();
+</script>
+</body>
+</html>
