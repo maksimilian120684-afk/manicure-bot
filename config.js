@@ -13,7 +13,7 @@ module.exports = {
   // Текст на стартовом экране чата (до 160 символов)
   profileGreeting: "Cześć! Tutaj zapiszesz się online na manicure, sprawdzisz ceny i zobaczysz prace mistrza. Kliknij „Rozpocznij”.",
   // Ссылка на портфолио мастера (Facebook, Instagram или любой сайт, только https)
-  portfolioUrl: "https://www.facebook.com/profile.php?id=61596355940206&sk=photos",
+  portfolioUrl: "https://www.facebook.com/profile.php?id=1446693171863015",
   // Публичный адрес бота (нужен для картинок). На Render подставляется сам, это запасной вариант.
   publicUrl: "https://manicure-bot-p4xm.onrender.com",
 
