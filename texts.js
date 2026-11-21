@@ -14,7 +14,7 @@ function parts(dateKey) {
 module.exports = {
   DAYS_SHORT, DAYS_LONG, MONTHS_GEN,
   // "wt 25.11"
-  dayShort(dateKey) { const p = parts(dateKey); return `${DAYS_SHORT[p.wd].toLowerCase()} ${pad(p.d)}.${pad(p.m)}`; },
+  dayShort(dateKey) { const p = parts(dateKey); return `${DAYS_SHORT[p.wd]} ${pad(p.d)}.${pad(p.m)}`; },
   // "wtorek, 25 listopada"
   dayLong(dateKey) { const p = parts(dateKey); return `${DAYS_LONG[p.wd]}, ${p.d} ${MONTHS_GEN[p.m - 1]}`; },
 
@@ -33,7 +33,13 @@ module.exports = {
     cancel: "❌ Anuluj",
     map: "🗺 Pokaż na mapie",
     call: "📞 Zadzwoń",
-    seeWorks: "📸 Zobacz prace"
+    seeWorks: "📸 Zobacz prace",
+    dayChip: (label) => `📅 ${label}`,
+    timeChip: (t) => `🕒 ${t}`,
+    prevDays: "◀ Wcześniej",
+    nextDays: "Później ▶",
+    moreTimes: "Więcej godzin ▶",
+    otherDay: "📅 Inny dzień"
   },
 
   welcomeGeneric: "Cześć! 👋 W czym mogę pomóc?",
@@ -71,8 +77,6 @@ module.exports = {
   },
 
   // legacy fallback, gdy nie ma kalendarza w oknie przeglądarki
-  chooseDay: "📅 Wybierz dogodny dzień:",
-  chooseTime: (label) => `${label}: wybierz godzinę 🕒`,
-  moreTimes: "Więcej godzin ▶",
-  otherDay: "Inny dzień"
+  chooseDay: (p, n) => (n > 1 ? `📅 Wybierz dzień (${p}/${n}):` : "📅 Wybierz dzień:"),
+  chooseTime: (dayLong) => `📅 ${dayLong}\n🕒 Wybierz godzinę:`
 };
