@@ -18,6 +18,7 @@ const BOOKINGS_FILE = path.join(__dirname, "bookings.json");
 
 const app = express();
 app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
+require("./privacy")(app); // политика конфиденциальности
 
 // ---------- отправка сообщений ----------
 const API = "https://graph.facebook.com/v21.0/me";
