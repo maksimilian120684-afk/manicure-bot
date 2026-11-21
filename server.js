@@ -6,6 +6,8 @@ const express = require("express");
 const cfg = require("./config");
 const cal = require("./calendar");
 const T = require("./texts");
+const { renderCalendar } = require("./calendar-image");
+const pad2 = (n) => String(n).padStart(2, "0");
 
 const PAGE_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
@@ -140,7 +142,6 @@ async function setupProfile() {
     }
   };
   await post(body, "Профиль чата:");
-  if (baseUrl().startsWith("https://")) await post({ whitelisted_domains: [baseUrl()] }, "Домены:");
 }
 
 // ---------- состояние диалога (в памяти) ----------
@@ -155,11 +156,11 @@ function saveBooking(b) {
 
 const svcByName = (n) => cfg.services.find((s) => s.name === n) || { name: n, duration: 60, price: "" };
 
-// ---------- ссылка на веб-календарь (подписанная, живёт 40 минут) ----------
+// ---------- подписанные ссылки на картинки календаря ----------
 const SECRET = () => APP_SECRET || VERIFY_TOKEN || "dev-secret";
-const b64u = (s) => Buffer.from(s).toString("base64url");
-function signToken(obj) {
-  const body = b64u(JSON.stringify({ ...obj, e: Date.now() + 40 * 60 * 1000 }));
+const b64u = (x) => Buffer.from(x).toString("base64url");
+function signToken(obj, ttlMs = 40 * 60 * 1000) {
+  const body = b64u(JSON.stringify({ ...obj, e: Date.now() + ttlMs }));
   const sig = crypto.createHmac("sha256", SECRET()).update(body).digest("base64url");
   return `${body}.${sig}`;
 }
@@ -174,21 +175,26 @@ function verifyToken(tok) {
     return o.e > Date.now() ? o : null;
   } catch (_) { return null; }
 }
+const addDaysKey = (k, n) => {
+  const [y, m, d] = k.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return `${t.getUTCFullYear()}-${pad2(t.getUTCMonth() + 1)}-${pad2(t.getUTCDate())}`;
+};
 
-async function offerCalendar(psid, s) {
+// ---------- календарь прямо в чате: картинка месяца + кнопки с датами ----------
+const PAGE_DAYS = 10;
+
+function calImageUrl(s, pageDays) {
   const svc = svcByName(s.data.service);
-  s.step = "calendar";
-  if (!baseUrl()) return offerDays(psid, s);
-  const url = `${baseUrl()}/book?t=${signToken({ p: psid, s: svc.name })}`;
-  const ok = await sendCards(psid, [card(img("calendar.jpg"), T.calendarTitle, T.calendarSub(svc), [
-    { type: "web_url", url, title: T.btn.openCalendar, webview_height_ratio: "tall" },
-    pb(T.btn.changeService, "BOOK")
-  ])]);
-  if (!ok) return offerDays(psid, s);
+  const [y, m] = pageDays[0].split("-").map(Number);
+  const mk = `${y}-${pad2(m)}-`;
+  const free = s.days.filter((k) => k.startsWith(mk)).map((k) => +k.slice(8));
+  const hi = pageDays.filter((k) => k.startsWith(mk)).map((k) => +k.slice(8));
+  return `${baseUrl()}/cal.png?p=${signToken({ y, m, f: free, h: hi, s: svc.name }, 7 * 24 * 3600 * 1000)}`;
 }
 
-// ---------- запасной вариант без веб-страницы: кнопки с днями ----------
-async function offerDays(psid, s) {
+// загружает свободные окна и показывает первую страницу дат
+async function offerCalendar(psid, s, page = 0) {
   const svc = svcByName(s.data.service);
   try {
     s.slots = await cal.getFreeSlots(cfg, svc.duration || 60);
@@ -197,23 +203,37 @@ async function offerDays(psid, s) {
     s.step = "date";
     return send(psid, T.calendarFail);
   }
-  const days = Object.keys(s.slots).slice(0, 12);
-  if (!days.length) {
+  s.days = Object.keys(s.slots);
+  if (!s.days.length) {
     sessions.delete(psid);
     return send(psid, T.noSlots(cfg.phone), MENU);
   }
-  s.step = "day";
-  return send(psid, T.chooseDay, days.map((d) => ({ title: cal.dayLabel(d), payload: "DAY:" + d })));
+  return showDays(psid, s, page);
+}
+
+async function showDays(psid, s, page) {
+  const pages = Math.ceil(s.days.length / PAGE_DAYS);
+  page = Math.max(0, Math.min(page, pages - 1));
+  s.page = page; s.step = "day";
+  const list = s.days.slice(page * PAGE_DAYS, (page + 1) * PAGE_DAYS);
+  if (baseUrl()) {
+    await sendRaw(psid, { attachment: { type: "image", payload: { url: calImageUrl(s, list), is_reusable: false } } });
+  }
+  const qr = list.map((k) => ({ title: T.btn.dayChip(cal.dayLabel(k)), payload: "DAY:" + k }));
+  if (page > 0) qr.push({ title: T.btn.prevDays, payload: "PAGE:" + (page - 1) });
+  if (page < pages - 1) qr.push({ title: T.btn.nextDays, payload: "PAGE:" + (page + 1) });
+  qr.push({ title: T.btn.changeService, payload: "BOOK" });
+  return send(psid, T.chooseDay(page + 1, pages), qr);
 }
 
 async function offerTimes(psid, s, offset) {
   const all = s.slots[s.data.dateKey] || [];
   const PAGE = 9;
-  const qr = all.slice(offset, offset + PAGE).map((t) => ({ title: t, payload: "TIME:" + t }));
-  if (offset + PAGE < all.length) qr.push({ title: T.moreTimes, payload: "MORE:" + (offset + PAGE) });
-  qr.push({ title: T.otherDay, payload: "DAYS" });
+  const qr = all.slice(offset, offset + PAGE).map((t) => ({ title: T.btn.timeChip(t), payload: "TIME:" + t }));
+  if (offset + PAGE < all.length) qr.push({ title: T.btn.moreTimes, payload: "MORE:" + (offset + PAGE) });
+  qr.push({ title: T.btn.otherDay, payload: "DAYS" });
   s.step = "time";
-  return send(psid, T.chooseTime(cal.dayLabel(s.data.dateKey)), qr);
+  return send(psid, T.chooseTime(s.data.date), qr);
 }
 
 async function askConfirm(psid, s) {
@@ -247,7 +267,7 @@ async function handle(psid, text, payload) {
   if (payload && payload.startsWith("SVC:")) {
     const svc = cfg.services[parseInt(payload.slice(4), 10)];
     if (!svc) return sendServices(psid);
-    const s = { step: "calendar", data: { service: svc.name } };
+    const s = { step: "day", data: { service: svc.name } };
     sessions.set(psid, s);
     if (cal.isConfigured()) return offerCalendar(psid, s);
     s.step = "date";
@@ -269,25 +289,23 @@ async function handle(psid, text, payload) {
     return sendServices(psid);
   }
 
-  // ----- выбор даты в веб-календаре: пока клиент выбирает, любое сообщение просто повторяет кнопку -----
-  if (s.step === "calendar") return offerCalendar(psid, s);
-
-  // ----- запасной вариант: даты и время кнопками -----
+  // ----- выбор даты и времени кнопками под картинкой календаря -----
   if (s.step === "day") {
+    if (payload && payload.startsWith("PAGE:")) return showDays(psid, s, parseInt(payload.slice(5), 10) || 0);
     if (payload && payload.startsWith("DAY:")) {
       s.data.dateKey = payload.slice(4);
       s.data.date = T.dayLong(s.data.dateKey);
       s.data.shortDate = T.dayShort(s.data.dateKey);
       return offerTimes(psid, s, 0);
     }
-    return offerDays(psid, s);
+    return showDays(psid, s, s.page || 0);
   }
   if (s.step === "time") {
-    if (payload === "DAYS") return offerDays(psid, s);
+    if (payload === "DAYS") return showDays(psid, s, s.page || 0);
     if (payload && payload.startsWith("MORE:")) return offerTimes(psid, s, parseInt(payload.slice(5), 10) || 0);
     if (payload && payload.startsWith("TIME:")) {
       s.data.time = payload.slice(5); s.step = "contact";
-      return send(psid, T.askContact);
+      return send(psid, `${T.selected(s.data)}\n\n${T.askContact}`);
     }
     return offerTimes(psid, s, 0);
   }
@@ -342,55 +360,34 @@ async function handle(psid, text, payload) {
   return send(psid, T.pickOne, MENU);
 }
 
-// ---------- веб-календарь (открывается кнопкой из чата) ----------
+// ---------- картинки ----------
 app.get("/img/:file", (req, res) => {
   if (!/^[\w-]+\.jpg$/.test(req.params.file)) return res.sendStatus(404);
   res.set("Cache-Control", "public, max-age=3600");
   res.sendFile(path.join(__dirname, "img_" + req.params.file), (err) => { if (err && !res.headersSent) res.sendStatus(404); });
 });
 app.get("/cover.jpg", (_req, res) => res.sendFile(path.join(__dirname, "img_cover.jpg")));
-app.get("/book", (_req, res) => {
-  res.set("Cache-Control", "no-store");
-  res.sendFile(path.join(__dirname, "book.html"));
-});
 
-app.get("/api/slots", async (req, res) => {
-  const tok = verifyToken(req.query.t);
-  if (!tok) return res.status(401).json({ error: "expired" });
-  const svc = svcByName(tok.s);
-  try {
-    const days = await cal.getFreeSlots(cfg, svc.duration || 60);
+// картинка-календарь месяца: параметры подписаны, чужие запросы отклоняются
+const calCache = new Map();
+app.get("/cal.png", (req, res) => {
+  const tok = verifyToken(req.query.p);
+  if (!tok || !tok.y || !tok.m) return res.sendStatus(404);
+  let buf = calCache.get(req.query.p);
+  if (!buf) {
+    const svc = svcByName(tok.s);
     const lp = cal.localParts(Date.now(), cfg.timezone);
-    const pad = (n) => String(n).padStart(2, "0");
-    res.json({
-      business: cfg.businessName,
-      service: { name: svc.name, price: svc.price, duration: svc.duration || 60 },
-      today: `${lp.y}-${pad(lp.m)}-${pad(lp.d)}`,
-      daysAhead: cfg.daysAhead,
-      days
+    const today = `${lp.y}-${pad2(lp.m)}-${pad2(lp.d)}`;
+    buf = renderCalendar({
+      business: cfg.businessName, year: tok.y, month: tok.m, free: tok.f, hi: tok.h,
+      today, last: addDaysKey(today, cfg.daysAhead),
+      service: `${svc.name} · ${svc.duration || 60} min · ${svc.price}`
     });
-  } catch (e) {
-    console.error("slots error:", e.message);
-    res.status(500).json({ error: "calendar" });
+    calCache.set(req.query.p, buf);
+    if (calCache.size > 60) calCache.delete(calCache.keys().next().value);
   }
-});
-
-app.post("/api/pick", async (req, res) => {
-  const tok = verifyToken(req.body && req.body.t);
-  if (!tok) return res.status(401).json({ error: "expired" });
-  const { dateKey, time } = req.body;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey || "") || !/^\d{2}:\d{2}$/.test(time || "")) return res.status(400).json({ error: "bad" });
-  const svc = svcByName(tok.s);
-  try {
-    const fresh = await cal.getFreeSlots(cfg, svc.duration || 60);
-    if (!(fresh[dateKey] || []).includes(time)) return res.status(409).json({ error: "taken" });
-  } catch (e) {
-    return res.status(500).json({ error: "calendar" });
-  }
-  const data = { service: svc.name, dateKey, time, date: T.dayLong(dateKey), shortDate: T.dayShort(dateKey) };
-  sessions.set(tok.p, { step: "contact", data });
-  res.json({ ok: true, date: data.date, time });
-  send(tok.p, `${T.selected(data)}\n\n${T.askContact}`).catch((e) => console.error("pick send error:", e));
+  res.set({ "Content-Type": "image/png", "Cache-Control": "public, max-age=3600" });
+  res.send(buf);
 });
 
 // ---------- webhook ----------
