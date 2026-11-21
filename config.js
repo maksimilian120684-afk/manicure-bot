@@ -1,8 +1,8 @@
 // Всё, что относится к конкретному бизнесу, меняется ТОЛЬКО здесь.
 // Для нового клиента копируете проект и правите этот файл (и пересобираете картинки: tools/make_images.py).
 module.exports = {
-  businessName: "Manicure Test",
-  greeting: "Cześć! 👋 Jestem asystentem salonu „Manicure Test”. W czym mogę pomóc?",
+  businessName: "Twój Asystent",
+  greeting: "Cześć! 👋 Tu Twój Asystent. W czym mogę pomóc?",
   address: "ul. Przykładowa 1 (wpisz prawdziwy adres)",
   hours: "Pon–Sob 10:00–19:00, niedziela nieczynne",
   phone: "+48 000 000 000",
