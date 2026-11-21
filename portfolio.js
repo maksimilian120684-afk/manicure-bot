@@ -12,7 +12,7 @@ const base = () => (process.env.RENDER_EXTERNAL_URL || cfg.publicUrl || "").repl
 function workFiles() {
   try {
     return fs.readdirSync(__dirname)
-      .filter((f) => /\.(jpe?g|png|webp)$/i.test(f) && !/^img_/.test(f) && !/^cover\./i.test(f))
+      .filter((f) => /\.(jpe?g|png|webp)$/i.test(f) && !/^img_/.test(f) && !/^(cover|обложка)/i.test(f))
       .sort();
   } catch (_) { return []; }
 }
